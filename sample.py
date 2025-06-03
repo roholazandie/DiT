@@ -8,6 +8,7 @@
 Sample new images from a pre-trained DiT.
 """
 import torch
+
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 from torchvision.utils import save_image
@@ -54,7 +55,7 @@ def main(args):
     # Setup classifier-free guidance:
     z = torch.cat([z, z], 0)
     y_null = torch.tensor([1000] * n, device=device)
-    y = torch.cat([y, y_null], 0)
+    y = torch.cat([y, y_null], 0)  # Append null class labels
     model_kwargs = dict(y=y, cfg_scale=args.cfg_scale)
 
     # Sample images:

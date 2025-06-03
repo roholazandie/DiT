@@ -171,31 +171,44 @@ class GaussianDiffusion:
 
         self.num_timesteps = int(betas.shape[0])
 
-        alphas = 1.0 - betas
-        self.alphas_cumprod = np.cumprod(alphas, axis=0)
-        self.alphas_cumprod_prev = np.append(1.0, self.alphas_cumprod[:-1])
-        self.alphas_cumprod_next = np.append(self.alphas_cumprod[1:], 0.0)
+        alphas = 1.0 - betas # [α₁, α₂, …, α_T]
+        self.alphas_cumprod = np.cumprod(alphas, axis=0) # [ᾱ₁, ᾱ₂, …, ᾱ_T]
+        self.alphas_cumprod_prev = np.append(1.0, self.alphas_cumprod[:-1]) # [1, ᾱ₁, ᾱ₂, …, ᾱ_{T-1}]
+        self.alphas_cumprod_next = np.append(self.alphas_cumprod[1:], 0.0) # [ᾱ₂, ᾱ₃, …, ᾱ_T, 0]
         assert self.alphas_cumprod_prev.shape == (self.num_timesteps,)
 
         # calculations for diffusion q(x_t | x_{t-1}) and others
-        self.sqrt_alphas_cumprod = np.sqrt(self.alphas_cumprod)
-        self.sqrt_one_minus_alphas_cumprod = np.sqrt(1.0 - self.alphas_cumprod)
-        self.log_one_minus_alphas_cumprod = np.log(1.0 - self.alphas_cumprod)
-        self.sqrt_recip_alphas_cumprod = np.sqrt(1.0 / self.alphas_cumprod)
-        self.sqrt_recipm1_alphas_cumprod = np.sqrt(1.0 / self.alphas_cumprod - 1)
+        self.sqrt_alphas_cumprod = np.sqrt(self.alphas_cumprod) # [√ᾱ₁, √ᾱ₂, …, √ᾱ_T]
+        self.sqrt_one_minus_alphas_cumprod = np.sqrt(1.0 - self.alphas_cumprod) # [√(1-ᾱ₁), √(1-ᾱ₂), …, √(1-ᾱ_T)]
+        self.log_one_minus_alphas_cumprod = np.log(1.0 - self.alphas_cumprod) # [log(1-ᾱ₁), log(1-ᾱ₂), …, log(1-ᾱ_T)]
+        self.sqrt_recip_alphas_cumprod = np.sqrt(1.0 / self.alphas_cumprod) # [√(1/ᾱ₁), √(1/ᾱ₂), …, √(1/ᾱ_T)]
+        self.sqrt_recipm1_alphas_cumprod = np.sqrt(1.0 / self.alphas_cumprod - 1) # [√(1/ᾱ₁ - 1), √(1/ᾱ₂ - 1), …, √(1/ᾱ_T - 1)]
 
         # calculations for posterior q(x_{t-1} | x_t, x_0)
+        # posterior variance is defined as:
+        # \sigma_t^2=\beta_t \frac{1-\bar{\alpha}_{t-1}}{1-\bar{\alpha}_t}
+        # var(x_{t-1} | x_t, x_0) = β_t * (1 - ᾱ_{t-1}) / (1 - ᾱ_t)
         self.posterior_variance = (
             betas * (1.0 - self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod)
         )
         # below: log calculation clipped because the posterior variance is 0 at the beginning of the diffusion chain
+        # posterior log variance is defined as:
+        # \sigma_t^2=\beta_t \frac{1-\bar{\alpha}_{t-1}}{1-\bar{\alpha}_t}
+        # log(σ_t^2) = log(β_t) + log((1 - ᾱ_{t-1}) / (1 - ᾱ_t))
         self.posterior_log_variance_clipped = np.log(
             np.append(self.posterior_variance[1], self.posterior_variance[1:])
         ) if len(self.posterior_variance) > 1 else np.array([])
 
+        # posterior mean coefficients are defined as:
+        # \mu_t\left(x_t, x_0\right)=\frac{\beta_t \sqrt{\bar{\alpha}_{t-1}}}{1-\bar{\alpha}_t} x_0+\frac{\left(1-\bar{\alpha}_{t-1}\right) \sqrt{\alpha_t}}{1-\bar{\alpha}_t} x_t .
+        # μ_t = β_t * √ᾱ_{t-1} / (1 - ᾱ_t) * x_0 + (1 - ᾱ_{t-1}) * √α_t / (1 - ᾱ_t) * x_t
+
+        # β_t * √ᾱ_{t-1} / (1 - ᾱ_t)
         self.posterior_mean_coef1 = (
             betas * np.sqrt(self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod)
         )
+
+        # (1 - ᾱ_{t-1}) * √α_t / (1 - ᾱ_t)
         self.posterior_mean_coef2 = (
             (1.0 - self.alphas_cumprod_prev) * np.sqrt(alphas) / (1.0 - self.alphas_cumprod)
         )
@@ -233,6 +246,7 @@ class GaussianDiffusion:
         """
         Compute the mean and variance of the diffusion posterior:
             q(x_{t-1} | x_t, x_0)
+
         """
         assert x_start.shape == x_t.shape
         posterior_mean = (
@@ -332,6 +346,10 @@ class GaussianDiffusion:
         }
 
     def _predict_xstart_from_eps(self, x_t, t, eps):
+        '''
+        If the model predicts ε'≈ε, to predict x₀, we use the formula:
+        \hat{x}_0=\sqrt{\frac{1}{\bar{\alpha}_t}} x_t-\sqrt{\frac{1}{\bar{\alpha}_t}-1} \hat{\varepsilon}
+        '''
         assert x_t.shape == eps.shape
         return (
             _extract_into_tensor(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t
